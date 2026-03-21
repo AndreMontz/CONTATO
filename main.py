@@ -16,6 +16,7 @@ class GameRoom:
         self.revealed_count = 1
         self.eaten_count = 0
         self.current_dica = None
+        self.last_dica_sender = None
         self.burnt_words = []
         self.used_dicas = []
         self.used_contacts = []
@@ -131,12 +132,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(json.dumps({"event": "ERROR", "message": "Tamanho da palavra inválido."}))
 
             elif action == "send_dica" and role in ["B", "C"] and room.status == "AGUARDANDO_DICA":
+                if role == room.last_dica_sender:
+                    await websocket.send_text(json.dumps({"event": "ERROR", "message": "Você não pode dar duas dicas seguidas! Deixe seu parceiro tentar."}))
+                    continue
                 dica = payload.get("dica").upper()
                 if dica in room.used_dicas:
                     await websocket.send_text(json.dumps({"event": "ERROR", "message": "Dica já usada!"}))
                     continue
                 room.used_dicas.append(dica)
                 room.current_dica = dica
+                room.last_dica_sender = role
                 room.status = "CORRIDA"
                 await room.broadcast({"event": "NOVA_DICA", "dica": dica, "sender": role, "sender_name": room.players[role]["name"]})
 
@@ -146,6 +151,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     if attempt not in room.burnt_words:
                         room.burnt_words.append(attempt)
                         room.eaten_count += 1
+                        room.status = "AGUARDANDO_DICA"
+                        room.current_dica = None
                         await room.broadcast({
                             "event": "INTERVENCAO", "word": attempt, 
                             "eaten": room.eaten_count, "name": room.players["A"]["name"],
