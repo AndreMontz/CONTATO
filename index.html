@@ -160,16 +160,15 @@
         document.getElementById("setup-area").classList.add("hidden");
     }
 
-    // --- CONEXÃO DINÂMICA INTELIGENTE ---
+    // --- CONEXÃO DINÂMICA (AUTO-COMPLETAR .DEV) ---
     document.getElementById("connect-btn").onclick = () => {
         let code = document.getElementById("room-code-input").value.trim();
         if (!code) return;
 
-        // Limpa a URL se o usuário colar o "https://" ou uma barra no final
-        code = code.replace("https://", "").replace("http://", "");
-        if (code.endsWith("/")) {
-            code = code.slice(0, -1);
-        }
+        // Limpa caso o usuário cole o link inteiro por engano, mantendo só o ID
+        code = code.replace("https://", "").replace("http://", "")
+                   .replace(".ngrok-free.dev", "").replace(".ngrok-free.app", "");
+        if (code.endsWith("/")) code = code.slice(0, -1);
 
         const connectBtn = document.getElementById("connect-btn");
         const connectError = document.getElementById("connect-error");
@@ -178,8 +177,8 @@
         connectBtn.disabled = true;
         connectError.classList.add("hidden");
 
-        // Usa exatamente o domínio inserido
-        const wsUrl = `wss://${code}/ws`;
+        // Completa magicamente com o domínio .dev do Ngrok
+        const wsUrl = `wss://${code}.ngrok-free.dev/ws`;
         
         try {
             ws = new WebSocket(wsUrl);
