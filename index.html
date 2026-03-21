@@ -190,6 +190,8 @@
                 connectPanel.classList.add("hidden");
                 lobbyPanel.classList.remove("hidden");
                 statusDisplay.innerText = "Lobby";
+                document.getElementById("room-display").innerText = `[ ${code} ]`;
+                document.getElementById("room-display").classList.remove("hidden");
                 log("Conectado à sala!", "log-success");
             };
 
@@ -208,6 +210,7 @@
                 gameElements.classList.add("hidden");
                 connectBtn.innerText = "ENTRAR NA SALA";
                 connectBtn.disabled = false;
+                document.getElementById("room-display").classList.add("hidden");
                 myRole = "";
             };
 
