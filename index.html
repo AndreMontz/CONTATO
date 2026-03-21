@@ -26,7 +26,7 @@
         button:active:not(:disabled) { transform: scale(0.95); }
         button:disabled { background-color: #555; cursor: not-allowed; }
         
-        #lobby-area { background: #222; padding: 15px; border-radius: 10px; border: 2px dashed #444; }
+        #lobby-area, #connect-panel { background: #222; padding: 15px; border-radius: 10px; border: 2px dashed #444; }
         .role-btn-group { display: flex; gap: 10px; }
         .btn-cerebro { background-color: #9c27b0; flex: 1; }
         .btn-adivinhador { background-color: #03a9f4; flex: 1; }
@@ -37,7 +37,6 @@
         .log-entry { margin-bottom: 5px; border-bottom: 1px solid #333; padding-bottom: 5px; animation: slide-up 0.3s ease-out; }
         .log-danger { color: var(--danger); } .log-success { color: var(--primary); } .log-warning { color: var(--warning); }
         
-        /* Animações e Overlay do Show */
         #overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.95); z-index: 1000; display: flex; flex-direction: column; justify-content: center; align-items: center; }
         #overlay-text { font-size: 6rem; font-weight: bold; color: white; text-shadow: 0 0 20px rgba(255,255,255,0.5); }
         #overlay-words { display: flex; flex-direction: column; gap: 20px; font-size: 3rem; font-weight: bold; text-align: center; }
@@ -71,7 +70,7 @@
         <h1>CONTATO</h1>
         <div class="status-bar">
             <span id="role-display">Bem-vindo(a)</span>
-            <span id="status-display">Lobby</span>
+            <span id="status-display">Conectando...</span>
         </div>
         <div class="status-bar">
             <span id="diff-display">Dificuldade: -</span>
@@ -82,7 +81,15 @@
         </div>
     </div>
 
-    <div class="panel" id="lobby-panel">
+    <div class="panel" id="connect-panel">
+        <h3 style="margin: 0; text-align: center;">Servidor</h3>
+        <p style="text-align: center; font-size: 0.9rem; color: #aaa;">Digite o código da sala gerado pelo Host.</p>
+        <input type="text" id="room-code-input" placeholder="Ex: abcd-123-45" autocomplete="off">
+        <button id="connect-btn">ENTRAR NA SALA</button>
+        <div id="connect-error" style="color: var(--danger); text-align: center; margin-top: 10px; font-size: 0.9rem;" class="hidden"></div>
+    </div>
+
+    <div class="panel hidden" id="lobby-panel">
         <h3 style="margin: 0; text-align: center;">Crie seu Perfil</h3>
         <div style="display: flex; gap: 10px;">
             <select id="emoji-select" style="width: 80px; font-size: 1.5rem;">
@@ -117,16 +124,20 @@
 </div>
 
 <script>
-    const ws = new WebSocket("wss://unhued-olid-ron.ngrok-free.dev/ws");
-    
+    let ws = null;
     let myRole = "";
     let currentAction = ""; 
-    let globalTimer = null; // Para o cronômetro de 10s
+    let globalTimer = null;
 
     const overlay = document.getElementById("overlay");
     const overlayText = document.getElementById("overlay-text");
     const overlayWords = document.getElementById("overlay-words");
     const statusDisplay = document.getElementById("status-display");
+    
+    // Paineis
+    const connectPanel = document.getElementById("connect-panel");
+    const lobbyPanel = document.getElementById("lobby-panel");
+    const gameElements = document.getElementById("game-elements");
 
     function log(msg, type="log-success") {
         const div = document.createElement("div"); div.className = `log-entry ${type}`; div.innerText = msg;
@@ -149,12 +160,179 @@
         document.getElementById("setup-area").classList.add("hidden");
     }
 
+    // --- CONEXÃO DINÂMICA (NGROK) ---
+    document.getElementById("connect-btn").onclick = () => {
+        let code = document.getElementById("room-code-input").value.trim();
+        if (!code) return;
+
+        // Limpa a URL caso o usuário cole o link inteiro por engano
+        code = code.replace("https://", "").replace("http://", "").replace(".ngrok-free.app", "");
+
+        const connectBtn = document.getElementById("connect-btn");
+        const connectError = document.getElementById("connect-error");
+        
+        connectBtn.innerText = "Conectando...";
+        connectBtn.disabled = true;
+        connectError.classList.add("hidden");
+
+        const wsUrl = `wss://${code}.ngrok-free.app/ws`;
+        
+        try {
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                connectPanel.classList.add("hidden");
+                lobbyPanel.classList.remove("hidden");
+                statusDisplay.innerText = "Lobby";
+                log("Conectado à sala!", "log-success");
+            };
+
+            ws.onerror = () => {
+                connectError.innerText = "Falha na conexão. O código está correto e o Host ativou o servidor?";
+                connectError.classList.remove("hidden");
+                connectBtn.innerText = "ENTRAR NA SALA";
+                connectBtn.disabled = false;
+                statusDisplay.innerText = "Erro";
+            };
+
+            ws.onclose = () => {
+                log("Conexão perdida com o servidor.", "log-danger");
+                connectPanel.classList.remove("hidden");
+                lobbyPanel.classList.add("hidden");
+                gameElements.classList.add("hidden");
+                connectBtn.innerText = "ENTRAR NA SALA";
+                connectBtn.disabled = false;
+                myRole = "";
+            };
+
+            // --- LÓGICA DO JOGO ---
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                const ev = data.event;
+
+                if (ev === "LOBBY_UPDATE" || ev === "DISCONNECT") {
+                    if (ev === "DISCONNECT") { 
+                        log(data.message, "log-danger"); clearInterval(globalTimer); overlay.classList.add("hidden");
+                        lobbyPanel.classList.remove("hidden"); gameElements.classList.add("hidden"); 
+                        document.getElementById("burnt-container").classList.add("hidden"); document.getElementById("burnt-display").innerText = "Nenhuma";
+                        myRole = ""; 
+                    }
+                    const p = data.players;
+                    document.getElementById("btn-cerebro").innerText = `CÉREBRO (${p["A"] ? 1 : 0}/1)`;
+                    document.getElementById("btn-adivinhador").innerText = `ADIVINHADOR (${(p["B"] ? 1 : 0) + (p["C"] ? 1 : 0)}/2)`;
+                    let badges = ""; for (let r in p) badges += `<span class="player-badge">${p[r].emoji} ${p[r].name}</span>`;
+                    document.getElementById("players-list").innerHTML = badges;
+                }
+                else if (ev === "JOINED") {
+                    myRole = data.role;
+                    document.getElementById("role-display").innerText = `Você é: ${myRole === "A" ? "CÉREBRO" : "ADIVINHADOR"}`;
+                    document.getElementById("btn-cerebro").disabled = true; document.getElementById("btn-adivinhador").disabled = true;
+                    document.getElementById("name-input").disabled = true; document.getElementById("emoji-select").disabled = true;
+                }
+                else if (ev === "GAME_START") {
+                    lobbyPanel.classList.add("hidden"); gameElements.classList.remove("hidden");
+                    document.getElementById("burnt-container").classList.remove("hidden"); log(data.message);
+                    if (myRole === "A") { setUI("CONFIGURAÇÃO", "Defina a Palavra Secreta", "Ex: FUTEBOL", "INICIAR JOGO", "set_word"); document.getElementById("setup-area").classList.remove("hidden"); } 
+                    else lockUI("O Cérebro está escolhendo a palavra...");
+                }
+                else if (ev === "WORD_SET") {
+                    document.getElementById("word-display").innerText = data.first_letter + " _ _ _ _";
+                    document.getElementById("diff-display").innerText = `Dificuldade: ${data.difficulty}`;
+                    if (myRole === "A") lockUI("Aguardando Dica..."); else setUI("SUA VEZ", "Pense em uma Dica", "Ex: Corte", "ENVIAR DICA", "send_dica");
+                }
+                else if (ev === "NOVA_DICA") {
+                    log(`DICA: "${data.dica}" (por ${data.sender_name})`, "log-warning");
+                    if (myRole === "A") setUI("CORRIDA", "Tente Intervir!", "Digite a palavra", "INTERVIR", "intervene");
+                    else if (myRole !== data.sender) setUI("CORRIDA", `Dica: ${data.dica}`, "Sabe a palavra?", "DAR CONTATO", "contact");
+                    else lockUI(`Dica enviada. Aguarde...`);
+                }
+                else if (ev === "INTERVENCAO") {
+                    log(`Cérebro (${data.name}) QUEIMOU a palavra: ${data.word}`, "log-danger");
+                    document.getElementById("penalty-display").innerText = `Letras Comidas: ${data.eaten}`;
+                    document.getElementById("burnt-display").innerText = data.burnt_list.join(", ");
+                }
+                else if (ev === "CONTATO_ACIONADO") {
+                    log(`CONTATO ACIONADO por ${data.name}!`, "log-warning");
+                    let timeLeft = 10;
+                    statusDisplay.innerText = `⏳ ${data.waiting_name} está escrevendo... ${timeLeft}s`;
+                    statusDisplay.className = "status-highlight";
+                    
+                    globalTimer = setInterval(() => {
+                        timeLeft--;
+                        if(timeLeft >= 0) statusDisplay.innerText = `⏳ ${data.waiting_name} está escrevendo... ${timeLeft}s`;
+                        else clearInterval(globalTimer);
+                    }, 1000);
+
+                    if (myRole === "A") lockUI("Aguardando sincronia...");
+                    else if (myRole === data.player) lockUI("Aguarde seu parceiro...");
+                    else setUI("SINCRONIA!", "Rápido! Qual é a palavra?", "Digite aqui", "SINCRONIZAR", "sync_word");
+                }
+                else if (ev === "INICIAR_CONTAGEM") {
+                    clearInterval(globalTimer); lockUI("Revelando...");
+                    statusDisplay.innerText = "🎬 Atenção!"; statusDisplay.className = "status-bar";
+                    
+                    overlay.classList.remove("hidden"); overlayWords.classList.add("hidden"); overlayText.classList.remove("hidden");
+                    
+                    let count = 3; overlayText.innerText = count + "...";
+                    overlayText.style.animation = "none"; void overlayText.offsetWidth; overlayText.style.animation = "pop 1s linear";
+                    
+                    let countdownInterval = setInterval(() => {
+                        count--;
+                        if (count > 0) {
+                            overlayText.innerText = count + "...";
+                            overlayText.style.animation = "none"; void overlayText.offsetWidth; overlayText.style.animation = "pop 1s linear";
+                        } else if (count === 0) {
+                            overlayText.innerText = "CONTATO!";
+                            overlayText.style.animation = "none"; void overlayText.offsetWidth; overlayText.style.animation = "pop 1s linear";
+                        } else {
+                            clearInterval(countdownInterval);
+                            overlayText.classList.add("hidden"); overlayWords.classList.remove("hidden");
+                            document.getElementById("word1-box").innerText = `${data.name_1}: ${data.word_1}`;
+                            document.getElementById("word2-box").innerText = `${data.name_2}: ${data.word_2}`;
+                            overlayWords.className = data.is_match ? "flash-green" : "flash-red";
+                        }
+                    }, 1000);
+                }
+                else if (ev === "SUCESSO_SINC" || ev === "PENALIDADE" || ev === "VITORIA_BC" || ev === "VITORIA_A") {
+                    overlay.classList.add("hidden"); clearInterval(globalTimer);
+                    if (ev === "SUCESSO_SINC") {
+                        log("Sincronia PERFEITA!", "log-success");
+                        document.getElementById("word-display").innerText = data.letras + " _ _ _ _";
+                        if (myRole === "A") lockUI("Aguardando nova dica..."); else setUI("SUA VEZ", "Nova rodada. Dica:", "Ex: Objeto", "ENVIAR DICA", "send_dica");
+                    } 
+                    else if (ev === "PENALIDADE") {
+                        log(`PENALIDADE: ${data.reason}`, "log-danger");
+                        document.getElementById("penalty-display").innerText = `Letras Comidas: ${data.eaten}`;
+                        if (myRole === "A") lockUI("Aguardando nova dica..."); else setUI("SUA VEZ", "Tentem novamente. Nova Dica:", "Ex: Objeto", "ENVIAR DICA", "send_dica");
+                    }
+                    else if (ev === "VITORIA_BC") { log(data.message, "log-success"); lockUI("VITÓRIA DOS ADIVINHADORES!"); }
+                    else if (ev === "VITORIA_A") { log(data.message, "log-danger"); lockUI("VITÓRIA DO CÉREBRO!"); }
+                }
+                else if (ev === "MORTE_SUBITA") log(`⚠️ MORTE SÚBITA: ${data.message}`, "log-danger");
+                else if (ev === "ERROR") log(`❌ Erro: ${data.message}`, "log-danger");
+            };
+        } catch (e) {
+            connectError.innerText = "URL inválida.";
+            connectError.classList.remove("hidden");
+            connectBtn.innerText = "ENTRAR NA SALA";
+            connectBtn.disabled = false;
+        }
+    };
+
+    // Permite usar o "Enter" para conectar
+    document.getElementById("room-code-input").addEventListener("keypress", (e) => { 
+        if (e.key === "Enter") document.getElementById("connect-btn").click(); 
+    });
+
+    // Funções de envio de dados (só funcionam se estiver conectado)
     function joinGame(role) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
         const name = document.getElementById("name-input").value.trim() || "Anônimo";
         ws.send(JSON.stringify({ action: "join", role: role, name: name, emoji: document.getElementById("emoji-select").value }));
     }
 
     document.getElementById("main-btn").onclick = () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
         const val = document.getElementById("main-input").value.trim();
         if (!val) return;
         if (currentAction === "set_word") ws.send(JSON.stringify({ action: "set_word", word: val, difficulty: document.getElementById("diff-select").value }));
@@ -164,121 +342,9 @@
         else if (currentAction === "sync_word") { ws.send(JSON.stringify({ action: "sync_word", word: val })); lockUI("Aguardando revelação..."); }
     };
 
-    document.getElementById("main-input").addEventListener("keypress", (e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("main-btn").click(); }});
-
-    function stopTimer() { clearInterval(globalTimer); }
-
-    ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        const ev = data.event;
-
-        if (ev === "LOBBY_UPDATE" || ev === "DISCONNECT") {
-            if (ev === "DISCONNECT") { 
-                log(data.message, "log-danger"); stopTimer(); overlay.classList.add("hidden");
-                document.getElementById("lobby-panel").classList.remove("hidden"); document.getElementById("game-elements").classList.add("hidden"); 
-                document.getElementById("burnt-container").classList.add("hidden"); document.getElementById("burnt-display").innerText = "Nenhuma";
-                myRole = ""; 
-            }
-            const p = data.players;
-            document.getElementById("btn-cerebro").innerText = `CÉREBRO (${p["A"] ? 1 : 0}/1)`;
-            document.getElementById("btn-adivinhador").innerText = `ADIVINHADOR (${(p["B"] ? 1 : 0) + (p["C"] ? 1 : 0)}/2)`;
-            let badges = ""; for (let r in p) badges += `<span class="player-badge">${p[r].emoji} ${p[r].name}</span>`;
-            document.getElementById("players-list").innerHTML = badges;
-        }
-        else if (ev === "JOINED") {
-            myRole = data.role;
-            document.getElementById("role-display").innerText = `Você é: ${myRole === "A" ? "CÉREBRO" : "ADIVINHADOR"}`;
-            document.getElementById("btn-cerebro").disabled = true; document.getElementById("btn-adivinhador").disabled = true;
-            document.getElementById("name-input").disabled = true; document.getElementById("emoji-select").disabled = true;
-        }
-        else if (ev === "GAME_START") {
-            document.getElementById("lobby-panel").classList.add("hidden"); document.getElementById("game-elements").classList.remove("hidden");
-            document.getElementById("burnt-container").classList.remove("hidden"); log(data.message);
-            if (myRole === "A") { setUI("CONFIGURAÇÃO", "Defina a Palavra Secreta", "Ex: FUTEBOL", "INICIAR JOGO", "set_word"); document.getElementById("setup-area").classList.remove("hidden"); } 
-            else lockUI("O Cérebro está escolhendo a palavra...");
-        }
-        else if (ev === "WORD_SET") {
-            document.getElementById("word-display").innerText = data.first_letter + " _ _ _ _";
-            document.getElementById("diff-display").innerText = `Dificuldade: ${data.difficulty}`;
-            if (myRole === "A") lockUI("Aguardando Dica..."); else setUI("SUA VEZ", "Pense em uma Dica", "Ex: Corte", "ENVIAR DICA", "send_dica");
-        }
-        else if (ev === "NOVA_DICA") {
-            log(`DICA: "${data.dica}" (por ${data.sender_name})`, "log-warning");
-            if (myRole === "A") setUI("CORRIDA", "Tente Intervir!", "Digite a palavra", "INTERVIR", "intervene");
-            else if (myRole !== data.sender) setUI("CORRIDA", `Dica: ${data.dica}`, "Sabe a palavra?", "DAR CONTATO", "contact");
-            else lockUI(`Dica enviada. Aguarde...`);
-        }
-        else if (ev === "INTERVENCAO") {
-            log(`Cérebro (${data.name}) QUEIMOU a palavra: ${data.word}`, "log-danger");
-            document.getElementById("penalty-display").innerText = `Letras Comidas: ${data.eaten}`;
-            document.getElementById("burnt-display").innerText = data.burnt_list.join(", ");
-        }
-        else if (ev === "CONTATO_ACIONADO") {
-            log(`CONTATO ACIONADO por ${data.name}!`, "log-warning");
-            
-            // Inicia o Timer Visual Global
-            let timeLeft = 10;
-            statusDisplay.innerText = `⏳ ${data.waiting_name} está escrevendo... ${timeLeft}s`;
-            statusDisplay.className = "status-highlight";
-            
-            globalTimer = setInterval(() => {
-                timeLeft--;
-                if(timeLeft >= 0) statusDisplay.innerText = `⏳ ${data.waiting_name} está escrevendo... ${timeLeft}s`;
-                else clearInterval(globalTimer);
-            }, 1000);
-
-            if (myRole === "A") lockUI("Aguardando sincronia...");
-            else if (myRole === data.player) lockUI("Aguarde seu parceiro...");
-            else setUI("SINCRONIA!", "Rápido! Qual é a palavra?", "Digite aqui", "SINCRONIZAR", "sync_word");
-        }
-        else if (ev === "INICIAR_CONTAGEM") {
-            stopTimer(); lockUI("Revelando...");
-            statusDisplay.innerText = "🎬 Atenção!"; statusDisplay.className = "status-bar";
-            
-            overlay.classList.remove("hidden"); overlayWords.classList.add("hidden"); overlayText.classList.remove("hidden");
-            
-            let count = 3;
-            overlayText.innerText = count + "...";
-            overlayText.style.animation = "none"; void overlayText.offsetWidth; overlayText.style.animation = "pop 1s linear";
-            
-            let countdownInterval = setInterval(() => {
-                count--;
-                if (count > 0) {
-                    overlayText.innerText = count + "...";
-                    overlayText.style.animation = "none"; void overlayText.offsetWidth; overlayText.style.animation = "pop 1s linear";
-                } else if (count === 0) {
-                    overlayText.innerText = "CONTATO!";
-                    overlayText.style.animation = "none"; void overlayText.offsetWidth; overlayText.style.animation = "pop 1s linear";
-                } else {
-                    clearInterval(countdownInterval);
-                    overlayText.classList.add("hidden"); overlayWords.classList.remove("hidden");
-                    
-                    document.getElementById("word1-box").innerText = `${data.name_1}: ${data.word_1}`;
-                    document.getElementById("word2-box").innerText = `${data.name_2}: ${data.word_2}`;
-                    
-                    overlayWords.className = data.is_match ? "flash-green" : "flash-red";
-                }
-            }, 1000);
-        }
-        else if (ev === "SUCESSO_SINC" || ev === "PENALIDADE" || ev === "VITORIA_BC" || ev === "VITORIA_A") {
-            overlay.classList.add("hidden"); stopTimer(); // Esconde o overlay de animação
-            
-            if (ev === "SUCESSO_SINC") {
-                log("Sincronia PERFEITA!", "log-success");
-                document.getElementById("word-display").innerText = data.letras + " _ _ _ _";
-                if (myRole === "A") lockUI("Aguardando nova dica..."); else setUI("SUA VEZ", "Nova rodada. Dica:", "Ex: Objeto", "ENVIAR DICA", "send_dica");
-            } 
-            else if (ev === "PENALIDADE") {
-                log(`PENALIDADE: ${data.reason}`, "log-danger");
-                document.getElementById("penalty-display").innerText = `Letras Comidas: ${data.eaten}`;
-                if (myRole === "A") lockUI("Aguardando nova dica..."); else setUI("SUA VEZ", "Tentem novamente. Nova Dica:", "Ex: Objeto", "ENVIAR DICA", "send_dica");
-            }
-            else if (ev === "VITORIA_BC") { log(data.message, "log-success"); lockUI("VITÓRIA DOS ADIVINHADORES!"); }
-            else if (ev === "VITORIA_A") { log(data.message, "log-danger"); lockUI("VITÓRIA DO CÉREBRO!"); }
-        }
-        else if (ev === "MORTE_SUBITA") log(`⚠️ MORTE SÚBITA: ${data.message}`, "log-danger");
-        else if (ev === "ERROR") log(`❌ Erro: ${data.message}`, "log-danger");
-    };
+    document.getElementById("main-input").addEventListener("keypress", (e) => { 
+        if (e.key === "Enter") { e.preventDefault(); document.getElementById("main-btn").click(); }
+    });
 </script>
 </body>
 </html>
