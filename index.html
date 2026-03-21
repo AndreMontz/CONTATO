@@ -36,7 +36,7 @@
         .log-entry { margin-bottom: 5px; border-bottom: 1px solid #333; padding-bottom: 5px; animation: slide-up 0.3s ease-out; }
         .log-danger { color: var(--danger); } .log-success { color: var(--primary); } .log-warning { color: var(--warning); }
         
-        /* Nova Barra de Vida e Tags Queimadas */
+        /* Barra de Vida e Tags Queimadas */
         .health-container { display: flex; align-items: center; gap: 8px; background: #222; padding: 4px 10px; border-radius: 20px; border: 1px solid #444; }
         .health-bar { display: flex; gap: 5px; min-height: 20px; align-items: center; }
         .health-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 8px var(--danger); animation: pop-dot 0.3s ease-out; }
@@ -316,6 +316,13 @@
                     log(`Cérebro (${data.name}) QUEIMOU a palavra: ${data.word}`, "log-danger");
                     updateHealthBar(data.eaten);
                     updateBurntTags(data.burnt_list);
+                    
+                    // --- CORREÇÃO: Destrava a tela para a próxima dica ---
+                    if (myRole === "A") {
+                        lockUI("Aguardando nova dica...");
+                    } else {
+                        setUI("SUA VEZ", "Nova Dica:", "Ex: Objeto", "ENVIAR DICA", "send_dica");
+                    }
                 }
                 else if (ev === "CONTATO_ACIONADO") {
                     log(`CONTATO ACIONADO por ${data.name}!`, "log-warning");
