@@ -1,350 +1,210 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Jogo: Contato Online</title>
-    <style>
-        :root {
-            --bg-color: #1a1a1a; --text-color: #f0f0f0; --primary: #4CAF50;
-            --danger: #f44336; --warning: #ff9800; --panel-bg: #2a2a2a;
-        }
-        body { font-family: 'Segoe UI', sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; height: 100vh; box-sizing: border-box; overflow: hidden; }
-        #game-container { width: 100%; max-width: 600px; display: flex; flex-direction: column; gap: 20px; z-index: 1; }
-        .header, .panel { background: var(--panel-bg); padding: 15px; border-radius: 10px; transition: transform 0.2s, box-shadow 0.2s; }
-        .header { text-align: center; }
-        .header h1 { margin: 0 0 10px 0; font-size: 1.5rem; }
-        .status-bar { display: flex; justify-content: space-between; font-size: 0.9rem; color: #aaa; margin-top: 10px; }
-        .status-highlight { color: var(--warning); font-weight: bold; animation: pulse-text 1s infinite alternate; }
-        .burnt-bar { color: var(--danger); font-size: 0.9rem; font-weight: bold; margin-top: 10px; text-align: left; }
-        .word-display { font-size: 2.5rem; letter-spacing: 5px; text-align: center; margin: 20px 0; font-weight: bold; color: var(--warning); transition: all 0.3s ease; }
-        .panel { display: flex; flex-direction: column; gap: 15px; }
-        input, select { width: 100%; padding: 12px; font-size: 1.1rem; border: none; border-radius: 5px; box-sizing: border-box; background: #333; color: white; outline: none; transition: border 0.3s; }
-        input:focus { border: 2px solid var(--primary); }
-        button { padding: 15px; font-size: 1.1rem; font-weight: bold; border: none; border-radius: 5px; cursor: pointer; background-color: var(--primary); color: white; transition: 0.2s; transform: scale(1); }
-        button:hover:not(:disabled) { filter: brightness(1.2); transform: scale(1.02); }
-        button:active:not(:disabled) { transform: scale(0.95); }
-        button:disabled { background-color: #555; cursor: not-allowed; }
+import asyncio
+import json
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+app = FastAPI()
+
+class GameRoom:
+    def __init__(self):
+        self.players = {}
+        self.reset_game_state()
+
+    def reset_game_state(self):
+        self.status = "LOBBY"
+        self.word = ""
+        self.difficulty = ""
+        self.revealed_count = 1
+        self.eaten_count = 0
+        self.current_dica = None
+        self.burnt_words = []
+        self.used_dicas = []
+        self.used_contacts = []
+        self.contact_player = None
+        self.contact_word = None
+        self.timer_task = None
+
+    def get_players_info(self):
+        info = {}
+        for role, data in self.players.items():
+            info[role] = {"name": data["name"], "emoji": data["emoji"]}
+        return info
+
+    async def disconnect(self, websocket: WebSocket):
+        role_to_remove = None
+        for role, data in self.players.items():
+            if data["ws"] == websocket:
+                role_to_remove = role
+                break
         
-        #lobby-area, #connect-panel { background: #222; padding: 15px; border-radius: 10px; border: 2px dashed #444; }
-        .role-btn-group { display: flex; gap: 10px; }
-        .btn-cerebro { background-color: #9c27b0; flex: 1; }
-        .btn-adivinhador { background-color: #03a9f4; flex: 1; }
-        .players-list { display: flex; gap: 10px; justify-content: center; margin-top: 15px; }
-        .player-badge { background: #444; padding: 5px 10px; border-radius: 20px; font-size: 0.9rem; animation: fade-in 0.5s; }
+        if role_to_remove:
+            del self.players[role_to_remove]
+            self.reset_game_state()
+            await self.broadcast({
+                "event": "DISCONNECT", 
+                "message": f"Um jogador desconectou. Partida reiniciada.",
+                "players": self.get_players_info()
+            })
 
-        #log-area { flex-grow: 1; background: #111; padding: 15px; border-radius: 10px; overflow-y: auto; max-height: 200px; font-family: monospace; font-size: 0.9rem; }
-        .log-entry { margin-bottom: 5px; border-bottom: 1px solid #333; padding-bottom: 5px; animation: slide-up 0.3s ease-out; }
-        .log-danger { color: var(--danger); } .log-success { color: var(--primary); } .log-warning { color: var(--warning); }
-        
-        #overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.95); z-index: 1000; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-        #overlay-text { font-size: 6rem; font-weight: bold; color: white; text-shadow: 0 0 20px rgba(255,255,255,0.5); }
-        #overlay-words { display: flex; flex-direction: column; gap: 20px; font-size: 3rem; font-weight: bold; text-align: center; }
-        .word-box { background: #222; padding: 20px 40px; border-radius: 15px; border: 4px solid #444; }
-        
-        .flash-green .word-box { animation: flashG 0.5s infinite alternate; border-color: var(--primary); }
-        .flash-red .word-box { animation: flashR 0.5s infinite alternate; border-color: var(--danger); }
-        
-        @keyframes pop { 0% { transform: scale(0.5); opacity: 0; } 50% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(1); opacity: 0; } }
-        @keyframes flashG { from { box-shadow: 0 0 10px var(--primary); color: white; } to { box-shadow: 0 0 50px var(--primary); color: var(--primary); } }
-        @keyframes flashR { from { box-shadow: 0 0 10px var(--danger); color: white; } to { box-shadow: 0 0 50px var(--danger); color: var(--danger); } }
-        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes slide-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes pulse-text { from { opacity: 0.6; } to { opacity: 1; } }
-        
-        .hidden { display: none !important; }
-    </style>
-</head>
-<body>
+    async def broadcast(self, message: dict):
+        for data in self.players.values():
+            await data["ws"].send_text(json.dumps(message))
 
-<div id="overlay" class="hidden">
-    <div id="overlay-text"></div>
-    <div id="overlay-words" class="hidden">
-        <div id="word1-box" class="word-box"></div>
-        <div id="word2-box" class="word-box"></div>
-    </div>
-</div>
+    def check_difficulty(self, word: str, difficulty: str) -> bool:
+        length = len(word)
+        if difficulty == "FACIL" and 8 <= length <= 10: return True
+        if difficulty == "MEDIO" and 5 <= length <= 7: return True
+        if difficulty == "DIFICIL" and 3 <= length <= 4: return True
+        return False
 
-<div id="game-container">
-    <div class="header">
-        <h1>CONTATO</h1>
-        <div class="status-bar">
-            <span id="role-display">Bem-vindo(a)</span>
-            <span id="status-display">Conectando...</span>
-        </div>
-        <div class="status-bar">
-            <span id="diff-display">Dificuldade: -</span>
-            <span id="penalty-display">Letras Comidas: 0</span>
-        </div>
-        <div class="burnt-bar hidden" id="burnt-container">
-            🔥 Queimadas: <span id="burnt-display">Nenhuma</span>
-        </div>
-    </div>
+    async def penalize(self, reason: str):
+        self.eaten_count += 1
+        await self.broadcast({"event": "PENALIDADE", "reason": reason, "eaten": self.eaten_count})
+        self.status = "AGUARDANDO_DICA"
+        self.current_dica = None
+        await self.check_game_over()
 
-    <div class="panel" id="connect-panel">
-        <h3 style="margin: 0; text-align: center;">Servidor</h3>
-        <p style="text-align: center; font-size: 0.9rem; color: #aaa;">Digite o código da sala gerado pelo Host.</p>
-        <input type="text" id="room-code-input" placeholder="Ex: abcd-123-45" autocomplete="off">
-        <button id="connect-btn">ENTRAR NA SALA</button>
-        <div id="connect-error" style="color: var(--danger); text-align: center; margin-top: 10px; font-size: 0.9rem;" class="hidden"></div>
-    </div>
+    async def check_game_over(self):
+        letras_disponiveis = len(self.word) - self.eaten_count
+        morte_subita = self.revealed_count >= letras_disponiveis
+        if morte_subita:
+            await self.broadcast({"event": "MORTE_SUBITA", "message": "Última chance! Acertem a palavra ou percam."})
 
-    <div class="panel hidden" id="lobby-panel">
-        <h3 style="margin: 0; text-align: center;">Crie seu Perfil</h3>
-        <div style="display: flex; gap: 10px;">
-            <select id="emoji-select" style="width: 80px; font-size: 1.5rem;">
-                <option value="😎">😎</option><option value="🤠">🤠</option><option value="👽">👽</option>
-                <option value="🤖">🤖</option><option value="🦊">🦊</option><option value="🧙‍♂️">🧙‍♂️</option>
-            </select>
-            <input type="text" id="name-input" placeholder="Seu apelido..." maxlength="12">
-        </div>
-        <div class="role-btn-group">
-            <button class="btn-cerebro" onclick="joinGame('CEREBRO')" id="btn-cerebro">CÉREBRO (0/1)</button>
-            <button class="btn-adivinhador" onclick="joinGame('ADIVINHADOR')" id="btn-adivinhador">ADIVINHADOR (0/2)</button>
-        </div>
-        <div class="players-list" id="players-list"></div>
-    </div>
+    async def sync_timeout(self):
+        await asyncio.sleep(10)
+        if self.status == "SINCRONIA":
+            await self.penalize("Tempo esgotado para sincronia!")
 
-    <div id="game-elements" class="hidden">
-        <div class="word-display" id="word-display">_ _ _ _ _</div>
-        <div class="panel" id="action-panel">
-            <h3 id="action-title" style="margin: 0; text-align: center;">Aguarde...</h3>
-            <div id="setup-area" class="hidden">
-                <select id="diff-select">
-                    <option value="FACIL">FÁCIL (8 a 10 letras)</option>
-                    <option value="MEDIO">MÉDIO (5 a 7 letras)</option>
-                    <option value="DIFICIL">DIFÍCIL (3 a 4 letras)</option>
-                </select>
-            </div>
-            <input type="text" id="main-input" placeholder="Digite aqui..." autocomplete="off">
-            <button id="main-btn">ENVIAR</button>
-        </div>
-    </div>
-    <div id="log-area"></div>
-</div>
+room = GameRoom()
 
-<script>
-    let ws = null;
-    let myRole = "";
-    let currentAction = ""; 
-    let globalTimer = null;
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    await websocket.send_text(json.dumps({"event": "LOBBY_UPDATE", "players": room.get_players_info()}))
 
-    const overlay = document.getElementById("overlay");
-    const overlayText = document.getElementById("overlay-text");
-    const overlayWords = document.getElementById("overlay-words");
-    const statusDisplay = document.getElementById("status-display");
-    
-    // Paineis
-    const connectPanel = document.getElementById("connect-panel");
-    const lobbyPanel = document.getElementById("lobby-panel");
-    const gameElements = document.getElementById("game-elements");
+    try:
+        while True:
+            data = await websocket.receive_text()
+            payload = json.loads(data)
+            action = payload.get("action")
 
-    function log(msg, type="log-success") {
-        const div = document.createElement("div"); div.className = `log-entry ${type}`; div.innerText = msg;
-        document.getElementById("log-area").prepend(div);
-    }
+            # FASE: LOBBY
+            if action == "join" and room.status == "LOBBY":
+                req_role = payload.get("role")
+                name = payload.get("name")
+                emoji = payload.get("emoji")
 
-    function setUI(state, title, inputPlaceholder, btnText, actionType) {
-        statusDisplay.innerText = state; statusDisplay.className = "status-bar"; 
-        document.getElementById("action-title").innerText = title; 
-        document.getElementById("main-input").placeholder = inputPlaceholder;
-        document.getElementById("main-btn").innerText = btnText; currentAction = actionType;
-        document.getElementById("main-input").value = ""; document.getElementById("main-input").disabled = false; 
-        document.getElementById("main-btn").disabled = false; document.getElementById("setup-area").classList.add("hidden");
-        document.getElementById("main-input").focus();
-    }
+                assigned_role = None
+                if req_role == "CEREBRO" and "A" not in room.players: assigned_role = "A"
+                elif req_role == "ADIVINHADOR":
+                    if "B" not in room.players: assigned_role = "B"
+                    elif "C" not in room.players: assigned_role = "C"
 
-    function lockUI(title) {
-        document.getElementById("action-title").innerText = title; 
-        document.getElementById("main-input").disabled = true; document.getElementById("main-btn").disabled = true; 
-        document.getElementById("setup-area").classList.add("hidden");
-    }
+                if assigned_role:
+                    room.players[assigned_role] = {"ws": websocket, "name": name, "emoji": emoji}
+                    await websocket.send_text(json.dumps({"event": "JOINED", "role": assigned_role}))
+                    await room.broadcast({"event": "LOBBY_UPDATE", "players": room.get_players_info()})
 
-    // --- CONEXÃO DINÂMICA (NGROK) ---
-    document.getElementById("connect-btn").onclick = () => {
-        let code = document.getElementById("room-code-input").value.trim();
-        if (!code) return;
+                    if len(room.players) == 3:
+                        room.status = "AGUARDANDO_PALAVRA"
+                        await room.broadcast({"event": "GAME_START", "message": "A sala está cheia. O jogo vai começar!"})
+                else:
+                    await websocket.send_text(json.dumps({"event": "ERROR", "message": "Papel ocupado ou sala cheia."}))
 
-        // Limpa a URL caso o usuário cole o link inteiro por engano
-        code = code.replace("https://", "").replace("http://", "").replace(".ngrok-free.app", "");
+            role = None
+            for r, p_data in room.players.items():
+                if p_data["ws"] == websocket:
+                    role = r
+                    break
+            
+            if not role: continue
 
-        const connectBtn = document.getElementById("connect-btn");
-        const connectError = document.getElementById("connect-error");
-        
-        connectBtn.innerText = "Conectando...";
-        connectBtn.disabled = true;
-        connectError.classList.add("hidden");
+            # FASE: JOGO ROLANDO
+            if action == "set_word" and role == "A" and room.status == "AGUARDANDO_PALAVRA":
+                word = payload.get("word").upper()
+                diff = payload.get("difficulty")
+                if room.check_difficulty(word, diff):
+                    room.word = word
+                    room.difficulty = diff
+                    room.status = "AGUARDANDO_DICA"
+                    await room.broadcast({"event": "WORD_SET", "first_letter": word[0], "difficulty": diff})
+                else:
+                    await websocket.send_text(json.dumps({"event": "ERROR", "message": "Tamanho da palavra inválido."}))
 
-        const wsUrl = `wss://${code}.ngrok-free.app/ws`;
-        
-        try {
-            ws = new WebSocket(wsUrl);
+            elif action == "send_dica" and role in ["B", "C"] and room.status == "AGUARDANDO_DICA":
+                dica = payload.get("dica").upper()
+                if dica in room.used_dicas:
+                    await websocket.send_text(json.dumps({"event": "ERROR", "message": "Dica já usada!"}))
+                    continue
+                room.used_dicas.append(dica)
+                room.current_dica = dica
+                room.status = "CORRIDA"
+                await room.broadcast({"event": "NOVA_DICA", "dica": dica, "sender": role, "sender_name": room.players[role]["name"]})
 
-            ws.onopen = () => {
-                connectPanel.classList.add("hidden");
-                lobbyPanel.classList.remove("hidden");
-                statusDisplay.innerText = "Lobby";
-                log("Conectado à sala!", "log-success");
-            };
+            elif action == "intervene" and role == "A" and room.status == "CORRIDA":
+                attempt = payload.get("word").upper()
+                if attempt != room.word and attempt.startswith(room.word[:room.revealed_count][-1]):
+                    if attempt not in room.burnt_words:
+                        room.burnt_words.append(attempt)
+                        room.eaten_count += 1
+                        await room.broadcast({
+                            "event": "INTERVENCAO", "word": attempt, 
+                            "eaten": room.eaten_count, "name": room.players["A"]["name"],
+                            "burnt_list": room.burnt_words
+                        })
+                        await room.check_game_over()
 
-            ws.onerror = () => {
-                connectError.innerText = "Falha na conexão. O código está correto e o Host ativou o servidor?";
-                connectError.classList.remove("hidden");
-                connectBtn.innerText = "ENTRAR NA SALA";
-                connectBtn.disabled = false;
-                statusDisplay.innerText = "Erro";
-            };
+            elif action == "contact" and role in ["B", "C"] and room.status == "CORRIDA":
+                word = payload.get("word").upper()
+                if word == room.current_dica or word in room.burnt_words or word in room.used_contacts:
+                    await websocket.send_text(json.dumps({"event": "ERROR", "message": "Palavra inválida/repetida!"}))
+                    continue
 
-            ws.onclose = () => {
-                log("Conexão perdida com o servidor.", "log-danger");
-                connectPanel.classList.remove("hidden");
-                lobbyPanel.classList.add("hidden");
-                gameElements.classList.add("hidden");
-                connectBtn.innerText = "ENTRAR NA SALA";
-                connectBtn.disabled = false;
-                myRole = "";
-            };
+                room.contact_player = role
+                room.contact_word = word
+                room.status = "SINCRONIA"
+                
+                waiting_role = "C" if role == "B" else "B"
+                waiting_name = room.players[waiting_role]["name"] if waiting_role in room.players else "Adversário"
+                
+                await room.broadcast({"event": "CONTATO_ACIONADO", "player": role, "name": room.players[role]["name"], "waiting_name": waiting_name})
+                room.timer_task = asyncio.create_task(room.sync_timeout())
 
-            // --- LÓGICA DO JOGO ---
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                const ev = data.event;
+            elif action == "sync_word" and role in ["B", "C"] and role != room.contact_player and room.status == "SINCRONIA":
+                if room.timer_task: room.timer_task.cancel()
+                sync_word = payload.get("word").upper()
+                
+                room.status = "ANIMACAO"
+                
+                room.used_contacts.append(room.contact_word)
+                if sync_word not in room.used_contacts: room.used_contacts.append(sync_word)
 
-                if (ev === "LOBBY_UPDATE" || ev === "DISCONNECT") {
-                    if (ev === "DISCONNECT") { 
-                        log(data.message, "log-danger"); clearInterval(globalTimer); overlay.classList.add("hidden");
-                        lobbyPanel.classList.remove("hidden"); gameElements.classList.add("hidden"); 
-                        document.getElementById("burnt-container").classList.add("hidden"); document.getElementById("burnt-display").innerText = "Nenhuma";
-                        myRole = ""; 
-                    }
-                    const p = data.players;
-                    document.getElementById("btn-cerebro").innerText = `CÉREBRO (${p["A"] ? 1 : 0}/1)`;
-                    document.getElementById("btn-adivinhador").innerText = `ADIVINHADOR (${(p["B"] ? 1 : 0) + (p["C"] ? 1 : 0)}/2)`;
-                    let badges = ""; for (let r in p) badges += `<span class="player-badge">${p[r].emoji} ${p[r].name}</span>`;
-                    document.getElementById("players-list").innerHTML = badges;
-                }
-                else if (ev === "JOINED") {
-                    myRole = data.role;
-                    document.getElementById("role-display").innerText = `Você é: ${myRole === "A" ? "CÉREBRO" : "ADIVINHADOR"}`;
-                    document.getElementById("btn-cerebro").disabled = true; document.getElementById("btn-adivinhador").disabled = true;
-                    document.getElementById("name-input").disabled = true; document.getElementById("emoji-select").disabled = true;
-                }
-                else if (ev === "GAME_START") {
-                    lobbyPanel.classList.add("hidden"); gameElements.classList.remove("hidden");
-                    document.getElementById("burnt-container").classList.remove("hidden"); log(data.message);
-                    if (myRole === "A") { setUI("CONFIGURAÇÃO", "Defina a Palavra Secreta", "Ex: FUTEBOL", "INICIAR JOGO", "set_word"); document.getElementById("setup-area").classList.remove("hidden"); } 
-                    else lockUI("O Cérebro está escolhendo a palavra...");
-                }
-                else if (ev === "WORD_SET") {
-                    document.getElementById("word-display").innerText = data.first_letter + " _ _ _ _";
-                    document.getElementById("diff-display").innerText = `Dificuldade: ${data.difficulty}`;
-                    if (myRole === "A") lockUI("Aguardando Dica..."); else setUI("SUA VEZ", "Pense em uma Dica", "Ex: Corte", "ENVIAR DICA", "send_dica");
-                }
-                else if (ev === "NOVA_DICA") {
-                    log(`DICA: "${data.dica}" (por ${data.sender_name})`, "log-warning");
-                    if (myRole === "A") setUI("CORRIDA", "Tente Intervir!", "Digite a palavra", "INTERVIR", "intervene");
-                    else if (myRole !== data.sender) setUI("CORRIDA", `Dica: ${data.dica}`, "Sabe a palavra?", "DAR CONTATO", "contact");
-                    else lockUI(`Dica enviada. Aguarde...`);
-                }
-                else if (ev === "INTERVENCAO") {
-                    log(`Cérebro (${data.name}) QUEIMOU a palavra: ${data.word}`, "log-danger");
-                    document.getElementById("penalty-display").innerText = `Letras Comidas: ${data.eaten}`;
-                    document.getElementById("burnt-display").innerText = data.burnt_list.join(", ");
-                }
-                else if (ev === "CONTATO_ACIONADO") {
-                    log(`CONTATO ACIONADO por ${data.name}!`, "log-warning");
-                    let timeLeft = 10;
-                    statusDisplay.innerText = `⏳ ${data.waiting_name} está escrevendo... ${timeLeft}s`;
-                    statusDisplay.className = "status-highlight";
-                    
-                    globalTimer = setInterval(() => {
-                        timeLeft--;
-                        if(timeLeft >= 0) statusDisplay.innerText = `⏳ ${data.waiting_name} está escrevendo... ${timeLeft}s`;
-                        else clearInterval(globalTimer);
-                    }, 1000);
+                name_1 = room.players[room.contact_player]["name"]
+                name_2 = room.players[role]["name"]
+                is_match = (room.contact_word == sync_word)
 
-                    if (myRole === "A") lockUI("Aguardando sincronia...");
-                    else if (myRole === data.player) lockUI("Aguarde seu parceiro...");
-                    else setUI("SINCRONIA!", "Rápido! Qual é a palavra?", "Digite aqui", "SINCRONIZAR", "sync_word");
-                }
-                else if (ev === "INICIAR_CONTAGEM") {
-                    clearInterval(globalTimer); lockUI("Revelando...");
-                    statusDisplay.innerText = "🎬 Atenção!"; statusDisplay.className = "status-bar";
-                    
-                    overlay.classList.remove("hidden"); overlayWords.classList.add("hidden"); overlayText.classList.remove("hidden");
-                    
-                    let count = 3; overlayText.innerText = count + "...";
-                    overlayText.style.animation = "none"; void overlayText.offsetWidth; overlayText.style.animation = "pop 1s linear";
-                    
-                    let countdownInterval = setInterval(() => {
-                        count--;
-                        if (count > 0) {
-                            overlayText.innerText = count + "...";
-                            overlayText.style.animation = "none"; void overlayText.offsetWidth; overlayText.style.animation = "pop 1s linear";
-                        } else if (count === 0) {
-                            overlayText.innerText = "CONTATO!";
-                            overlayText.style.animation = "none"; void overlayText.offsetWidth; overlayText.style.animation = "pop 1s linear";
-                        } else {
-                            clearInterval(countdownInterval);
-                            overlayText.classList.add("hidden"); overlayWords.classList.remove("hidden");
-                            document.getElementById("word1-box").innerText = `${data.name_1}: ${data.word_1}`;
-                            document.getElementById("word2-box").innerText = `${data.name_2}: ${data.word_2}`;
-                            overlayWords.className = data.is_match ? "flash-green" : "flash-red";
-                        }
-                    }, 1000);
-                }
-                else if (ev === "SUCESSO_SINC" || ev === "PENALIDADE" || ev === "VITORIA_BC" || ev === "VITORIA_A") {
-                    overlay.classList.add("hidden"); clearInterval(globalTimer);
-                    if (ev === "SUCESSO_SINC") {
-                        log("Sincronia PERFEITA!", "log-success");
-                        document.getElementById("word-display").innerText = data.letras + " _ _ _ _";
-                        if (myRole === "A") lockUI("Aguardando nova dica..."); else setUI("SUA VEZ", "Nova rodada. Dica:", "Ex: Objeto", "ENVIAR DICA", "send_dica");
-                    } 
-                    else if (ev === "PENALIDADE") {
-                        log(`PENALIDADE: ${data.reason}`, "log-danger");
-                        document.getElementById("penalty-display").innerText = `Letras Comidas: ${data.eaten}`;
-                        if (myRole === "A") lockUI("Aguardando nova dica..."); else setUI("SUA VEZ", "Tentem novamente. Nova Dica:", "Ex: Objeto", "ENVIAR DICA", "send_dica");
-                    }
-                    else if (ev === "VITORIA_BC") { log(data.message, "log-success"); lockUI("VITÓRIA DOS ADIVINHADORES!"); }
-                    else if (ev === "VITORIA_A") { log(data.message, "log-danger"); lockUI("VITÓRIA DO CÉREBRO!"); }
-                }
-                else if (ev === "MORTE_SUBITA") log(`⚠️ MORTE SÚBITA: ${data.message}`, "log-danger");
-                else if (ev === "ERROR") log(`❌ Erro: ${data.message}`, "log-danger");
-            };
-        } catch (e) {
-            connectError.innerText = "URL inválida.";
-            connectError.classList.remove("hidden");
-            connectBtn.innerText = "ENTRAR NA SALA";
-            connectBtn.disabled = false;
-        }
-    };
+                await room.broadcast({
+                    "event": "INICIAR_CONTAGEM", 
+                    "word_1": room.contact_word, "word_2": sync_word, 
+                    "name_1": name_1, "name_2": name_2, "is_match": is_match
+                })
 
-    // Permite usar o "Enter" para conectar
-    document.getElementById("room-code-input").addEventListener("keypress", (e) => { 
-        if (e.key === "Enter") document.getElementById("connect-btn").click(); 
-    });
+                await asyncio.sleep(6)
 
-    // Funções de envio de dados (só funcionam se estiver conectado)
-    function joinGame(role) {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        const name = document.getElementById("name-input").value.trim() || "Anônimo";
-        ws.send(JSON.stringify({ action: "join", role: role, name: name, emoji: document.getElementById("emoji-select").value }));
-    }
+                if is_match:
+                    if room.contact_word == room.word:
+                        await room.broadcast({"event": "VITORIA_BC", "message": f"{name_1} e {name_2} acertaram a palavra secreta!"})
+                        room.status = "GAME_OVER"
+                    else:
+                        room.revealed_count += 1
+                        room.status = "AGUARDANDO_DICA"
+                        await room.broadcast({"event": "SUCESSO_SINC", "letras": room.word[:room.revealed_count]})
+                        await room.check_game_over()
+                else:
+                    if sync_word == room.word or room.contact_word == room.word:
+                        await room.broadcast({"event": "VITORIA_A", "message": f"{name_1} e {name_2} queimaram a palavra secreta!"})
+                        room.status = "GAME_OVER"
+                    else:
+                        await room.penalize("As palavras não sincronizaram.")
 
-    document.getElementById("main-btn").onclick = () => {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        const val = document.getElementById("main-input").value.trim();
-        if (!val) return;
-        if (currentAction === "set_word") ws.send(JSON.stringify({ action: "set_word", word: val, difficulty: document.getElementById("diff-select").value }));
-        else if (currentAction === "send_dica") ws.send(JSON.stringify({ action: "send_dica", dica: val }));
-        else if (currentAction === "intervene") { ws.send(JSON.stringify({ action: "intervene", word: val })); document.getElementById("main-input").value = ""; }
-        else if (currentAction === "contact") ws.send(JSON.stringify({ action: "contact", word: val }));
-        else if (currentAction === "sync_word") { ws.send(JSON.stringify({ action: "sync_word", word: val })); lockUI("Aguardando revelação..."); }
-    };
-
-    document.getElementById("main-input").addEventListener("keypress", (e) => { 
-        if (e.key === "Enter") { e.preventDefault(); document.getElementById("main-btn").click(); }
-    });
-</script>
-</body>
-</html>
+    except WebSocketDisconnect:
+        await room.disconnect(websocket)
