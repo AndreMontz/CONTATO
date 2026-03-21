@@ -14,9 +14,8 @@
         .header, .panel { background: var(--panel-bg); padding: 15px; border-radius: 10px; transition: transform 0.2s, box-shadow 0.2s; }
         .header { text-align: center; }
         .header h1 { margin: 0 0 10px 0; font-size: 1.5rem; }
-        .status-bar { display: flex; justify-content: space-between; font-size: 0.9rem; color: #aaa; margin-top: 10px; }
+        .status-bar { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; color: #aaa; margin-top: 10px; }
         .status-highlight { color: var(--warning); font-weight: bold; animation: pulse-text 1s infinite alternate; }
-        .burnt-bar { color: var(--danger); font-size: 0.9rem; font-weight: bold; margin-top: 10px; text-align: left; }
         .word-display { font-size: 2.5rem; letter-spacing: 5px; text-align: center; margin: 20px 0; font-weight: bold; color: var(--warning); transition: all 0.3s ease; }
         .panel { display: flex; flex-direction: column; gap: 15px; }
         input, select { width: 100%; padding: 12px; font-size: 1.1rem; border: none; border-radius: 5px; box-sizing: border-box; background: #333; color: white; outline: none; transition: border 0.3s; }
@@ -37,6 +36,15 @@
         .log-entry { margin-bottom: 5px; border-bottom: 1px solid #333; padding-bottom: 5px; animation: slide-up 0.3s ease-out; }
         .log-danger { color: var(--danger); } .log-success { color: var(--primary); } .log-warning { color: var(--warning); }
         
+        /* Nova Barra de Vida e Tags Queimadas */
+        .health-container { display: flex; align-items: center; gap: 8px; background: #222; padding: 4px 10px; border-radius: 20px; border: 1px solid #444; }
+        .health-bar { display: flex; gap: 5px; min-height: 20px; align-items: center; }
+        .health-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 8px var(--danger); animation: pop-dot 0.3s ease-out; }
+        
+        .burnt-bar { margin-top: 15px; text-align: left; }
+        .burnt-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+        .burnt-tag { background: rgba(244, 67, 54, 0.15); border: 1px solid var(--danger); color: #ffcccc; padding: 5px 12px; border-radius: 15px; font-size: 0.85rem; font-weight: bold; letter-spacing: 1px; animation: pop-dot 0.3s ease-out; }
+
         #overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.95); z-index: 1000; display: flex; flex-direction: column; justify-content: center; align-items: center; }
         #overlay-text { font-size: 6rem; font-weight: bold; color: white; text-shadow: 0 0 20px rgba(255,255,255,0.5); }
         #overlay-words { display: flex; flex-direction: column; gap: 20px; font-size: 3rem; font-weight: bold; text-align: center; }
@@ -46,6 +54,7 @@
         .flash-red .word-box { animation: flashR 0.5s infinite alternate; border-color: var(--danger); }
         
         @keyframes pop { 0% { transform: scale(0.5); opacity: 0; } 50% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(1); opacity: 0; } }
+        @keyframes pop-dot { 0% { transform: scale(0); } 70% { transform: scale(1.4); } 100% { transform: scale(1); } }
         @keyframes flashG { from { box-shadow: 0 0 10px var(--primary); color: white; } to { box-shadow: 0 0 50px var(--primary); color: var(--primary); } }
         @keyframes flashR { from { box-shadow: 0 0 10px var(--danger); color: white; } to { box-shadow: 0 0 50px var(--danger); color: var(--danger); } }
         @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
@@ -68,19 +77,30 @@
 <div id="game-container">
     <div class="header">
         <h1>CONTATO</h1>
+        
         <div class="status-bar">
             <span id="role-display">Bem-vindo(a)</span>
-            <div style="text-align: right;">
-                <span id="room-display" style="color: var(--primary); font-weight: bold; margin-right: 10px;" class="hidden"></span>
+            <div style="text-align: right; display: flex; align-items: center; gap: 10px;">
+                <span id="room-display" style="color: var(--primary); font-weight: bold;" class="hidden"></span>
                 <span id="status-display">Conectando...</span>
             </div>
         </div>
+
         <div class="status-bar">
             <span id="diff-display">Dificuldade: -</span>
-            <span id="penalty-display">Letras Comidas: 0</span>
+            <div class="health-container" title="Letras Comidas (Penalidade)">
+                <span style="font-size:1.1rem;">💀</span>
+                <div id="penalty-display" class="health-bar">
+                    <span style="color: #aaa; font-size: 0.9rem;">0</span>
+                </div>
+            </div>
         </div>
+
         <div class="burnt-bar hidden" id="burnt-container">
-            🔥 Queimadas: <span id="burnt-display">Nenhuma</span>
+            <div style="margin-bottom: 8px; color: #aaa; font-size: 0.85rem; font-weight: bold;">🔥 PALAVRAS QUEIMADAS:</div>
+            <div id="burnt-display" class="burnt-tags">
+                <span style="color: #555; font-size: 0.9rem;">Nenhuma</span>
+            </div>
         </div>
     </div>
 
@@ -163,12 +183,41 @@
         document.getElementById("setup-area").classList.add("hidden");
     }
 
+    // --- FUNÇÕES VISUAIS DA BARRA DE VIDA ---
+    function updateHealthBar(count) {
+        const container = document.getElementById("penalty-display");
+        container.innerHTML = "";
+        if(count === 0) {
+            container.innerHTML = `<span style="color: #aaa; font-size: 0.9rem;">0</span>`;
+            return;
+        }
+        for(let i = 0; i < count; i++){
+            const dot = document.createElement("div");
+            dot.className = "health-dot";
+            container.appendChild(dot);
+        }
+    }
+
+    function updateBurntTags(list) {
+        const container = document.getElementById("burnt-display");
+        container.innerHTML = "";
+        if(!list || list.length === 0) {
+            container.innerHTML = `<span style="color: #555; font-size: 0.9rem;">Nenhuma</span>`;
+            return;
+        }
+        list.forEach(word => {
+            const tag = document.createElement("span");
+            tag.className = "burnt-tag";
+            tag.innerText = word;
+            container.appendChild(tag);
+        });
+    }
+
     // --- CONEXÃO DINÂMICA (AUTO-COMPLETAR .DEV) ---
     document.getElementById("connect-btn").onclick = () => {
         let code = document.getElementById("room-code-input").value.trim();
         if (!code) return;
 
-        // Limpa caso o usuário cole o link inteiro por engano, mantendo só o ID
         code = code.replace("https://", "").replace("http://", "")
                    .replace(".ngrok-free.dev", "").replace(".ngrok-free.app", "");
         if (code.endsWith("/")) code = code.slice(0, -1);
@@ -180,7 +229,6 @@
         connectBtn.disabled = true;
         connectError.classList.add("hidden");
 
-        // Completa magicamente com o domínio .dev do Ngrok
         const wsUrl = `wss://${code}.ngrok-free.dev/ws`;
         
         try {
@@ -190,8 +238,11 @@
                 connectPanel.classList.add("hidden");
                 lobbyPanel.classList.remove("hidden");
                 statusDisplay.innerText = "Lobby";
+                
+                // Exibe o código da sala no canto
                 document.getElementById("room-display").innerText = `[ ${code} ]`;
                 document.getElementById("room-display").classList.remove("hidden");
+                
                 log("Conectado à sala!", "log-success");
             };
 
@@ -210,7 +261,12 @@
                 gameElements.classList.add("hidden");
                 connectBtn.innerText = "ENTRAR NA SALA";
                 connectBtn.disabled = false;
+                
+                // Esconde o código da sala e limpa visuais
                 document.getElementById("room-display").classList.add("hidden");
+                updateHealthBar(0);
+                updateBurntTags([]);
+                
                 myRole = "";
             };
 
@@ -223,7 +279,8 @@
                     if (ev === "DISCONNECT") { 
                         log(data.message, "log-danger"); clearInterval(globalTimer); overlay.classList.add("hidden");
                         lobbyPanel.classList.remove("hidden"); gameElements.classList.add("hidden"); 
-                        document.getElementById("burnt-container").classList.add("hidden"); document.getElementById("burnt-display").innerText = "Nenhuma";
+                        document.getElementById("burnt-container").classList.add("hidden"); 
+                        updateHealthBar(0); updateBurntTags([]);
                         myRole = ""; 
                     }
                     const p = data.players;
@@ -257,8 +314,8 @@
                 }
                 else if (ev === "INTERVENCAO") {
                     log(`Cérebro (${data.name}) QUEIMOU a palavra: ${data.word}`, "log-danger");
-                    document.getElementById("penalty-display").innerText = `Letras Comidas: ${data.eaten}`;
-                    document.getElementById("burnt-display").innerText = data.burnt_list.join(", ");
+                    updateHealthBar(data.eaten);
+                    updateBurntTags(data.burnt_list);
                 }
                 else if (ev === "CONTATO_ACIONADO") {
                     log(`CONTATO ACIONADO por ${data.name}!`, "log-warning");
@@ -311,7 +368,7 @@
                     } 
                     else if (ev === "PENALIDADE") {
                         log(`PENALIDADE: ${data.reason}`, "log-danger");
-                        document.getElementById("penalty-display").innerText = `Letras Comidas: ${data.eaten}`;
+                        updateHealthBar(data.eaten);
                         if (myRole === "A") lockUI("Aguardando nova dica..."); else setUI("SUA VEZ", "Tentem novamente. Nova Dica:", "Ex: Objeto", "ENVIAR DICA", "send_dica");
                     }
                     else if (ev === "VITORIA_BC") { log(data.message, "log-success"); lockUI("VITÓRIA DOS ADIVINHADORES!"); }
