@@ -83,8 +83,8 @@
 
     <div class="panel" id="connect-panel">
         <h3 style="margin: 0; text-align: center;">Servidor</h3>
-        <p style="text-align: center; font-size: 0.9rem; color: #aaa;">Digite o código da sala gerado pelo Host.</p>
-        <input type="text" id="room-code-input" placeholder="Ex: abcd-123-45" autocomplete="off">
+        <p style="text-align: center; font-size: 0.9rem; color: #aaa;">Cole o link ou código gerado pelo Ngrok.</p>
+        <input type="text" id="room-code-input" placeholder="Ex: link-do.ngrok-free.dev" autocomplete="off">
         <button id="connect-btn">ENTRAR NA SALA</button>
         <div id="connect-error" style="color: var(--danger); text-align: center; margin-top: 10px; font-size: 0.9rem;" class="hidden"></div>
     </div>
@@ -160,13 +160,16 @@
         document.getElementById("setup-area").classList.add("hidden");
     }
 
-    // --- CONEXÃO DINÂMICA (NGROK) ---
+    // --- CONEXÃO DINÂMICA INTELIGENTE ---
     document.getElementById("connect-btn").onclick = () => {
         let code = document.getElementById("room-code-input").value.trim();
         if (!code) return;
 
-        // Limpa a URL caso o usuário cole o link inteiro por engano
-        code = code.replace("https://", "").replace("http://", "").replace(".ngrok-free.app", "");
+        // Limpa a URL se o usuário colar o "https://" ou uma barra no final
+        code = code.replace("https://", "").replace("http://", "");
+        if (code.endsWith("/")) {
+            code = code.slice(0, -1);
+        }
 
         const connectBtn = document.getElementById("connect-btn");
         const connectError = document.getElementById("connect-error");
@@ -175,7 +178,8 @@
         connectBtn.disabled = true;
         connectError.classList.add("hidden");
 
-        const wsUrl = `wss://${code}.ngrok-free.app/ws`;
+        // Usa exatamente o domínio inserido
+        const wsUrl = `wss://${code}/ws`;
         
         try {
             ws = new WebSocket(wsUrl);
@@ -188,7 +192,7 @@
             };
 
             ws.onerror = () => {
-                connectError.innerText = "Falha na conexão. O código está correto e o Host ativou o servidor?";
+                connectError.innerText = "Falha na conexão. Verifique se copiou o link correto do Ngrok.";
                 connectError.classList.remove("hidden");
                 connectBtn.innerText = "ENTRAR NA SALA";
                 connectBtn.disabled = false;
@@ -324,7 +328,7 @@
         if (e.key === "Enter") document.getElementById("connect-btn").click(); 
     });
 
-    // Funções de envio de dados (só funcionam se estiver conectado)
+    // Funções de envio de dados
     function joinGame(role) {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         const name = document.getElementById("name-input").value.trim() || "Anônimo";
